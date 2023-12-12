@@ -30,7 +30,8 @@ class CTABacktester:
     def get_benchmark_data(self):
         """获取基准数据"""
         # 这里假设基准数据保存在名为benchmark.csv的CSV文件中，包含日期和收益率列
-        benchmark_data = pd.read_csv('benchmark.csv', parse_dates=['date'])
+        benchmark_data = pd.read_parquet('./data/benchmark.parquet')
+        benchmark_data['date'] = pd.to_datetime(benchmark_data['date'])
         benchmark_data.set_index('date', inplace=True)
 
         # 根据回测起止时间筛选数据
@@ -44,11 +45,12 @@ class CTABacktester:
         :param asset: 标的名称
         """
         # 这里假设每个标的数据保存在以标的名称命名的CSV文件中，包含日期和收益率列
-        asset_data = pd.read_csv(f'{asset}.csv', parse_dates=['date'])
+        asset_data = pd.read_parquet('./data/' + f'{asset}.parquet')
+        asset_data['date'] = pd.to_datetime(asset_data['date'])
         asset_data.set_index('date', inplace=True)
 
         # 根据回测起止时间筛选数据
-        asset_data = asset_data.loc[self.start_date: self.end_date]
+        asset_data = asset_data.loc[self.start_date:self.end_date]
 
         return asset_data
 
@@ -60,20 +62,21 @@ class CTABacktester:
             asset_data = self.get_asset_data(asset)
 
             if portfolio_returns is None:
-                portfolio_returns = asset_data['returns'] * weight
+                portfolio_returns = asset_data['return'] * weight
             else:
-                portfolio_returns += asset_data['returns'] * weight
+                portfolio_returns += asset_data['return'] * weight
 
         return portfolio_returns
 
     def execute_trades(self):
         """执行交易并计算策略收益率、基准收益率和超额收益率"""
         self.strategy_returns = self.get_portfolio_returns()
-        self.benchmark_returns = self.get_benchmark_data()['returns']
+        self.benchmark_returns = self.get_benchmark_data()['return']
         self.excess_returns = self.strategy_returns - self.benchmark_returns
 
     def plot_performance(self):
         """绘制策略和基准收益走势图"""
+        plt.rcParams["figure.autolayout"] = True
         plt.figure(figsize=(10, 6))
         plt.plot(self.strategy_returns.cumsum(), label='Strategy Returns')
         plt.plot(self.benchmark_returns.cumsum(), label='Benchmark Returns')
@@ -112,14 +115,14 @@ class CTABacktester:
 
     def get_dataframe(self):
         """计算策略的各项指标"""
-        metrics = {}
+        metrics = dict()
 
-        metrics['Annualized Returns'] = [
+        metrics['Annual Returns'] = [
             self.benchmark_returns.mean() * 252,
             self.strategy_returns.mean() * 252,
             self.excess_returns.mean() * 252]
 
-        metrics['Annualized Volatility'] = [
+        metrics['Annual Volatility'] = [
             self.benchmark_returns.std() * np.sqrt(252),
             self.strategy_returns.std() * np.sqrt(252),
             self.excess_returns.std() * np.sqrt(252)]
@@ -129,27 +132,29 @@ class CTABacktester:
             self.calculate_max_drawdown(self.strategy_returns),
             self.calculate_max_drawdown(self.excess_returns)]
 
-        metrics['Sharpe Ratio'] = [
+        metrics['Sharpe'] = [
             self.calculate_sharpe_ratio(self.benchmark_returns),
             self.calculate_sharpe_ratio(self.strategy_returns),
             self.calculate_sharpe_ratio(self.excess_returns)]
 
-        metrics['Sortino Ratio'] = [
+        metrics['Sortino'] = [
             self.calculate_sortino_ratio(self.benchmark_returns),
             self.calculate_sortino_ratio(self.strategy_returns),
             self.calculate_sortino_ratio(self.excess_returns)]
 
         df = pd.DataFrame(metrics)
-        df.set_index(['benchmark', 'strategy', 'excess'], inplace=True)
+        df.set_index([['benchmark', 'strategy', 'excess']], inplace=True)
 
         return df
 
     def plot_returns_distribution(self):
         """绘制收益分布直方图和统计指标"""
-        plt.figure(figsize=(10, 6))
-
+        plt.figure(figsize=(25, 6))
+        plt.rcParams['font.size'] = 16
+        plt.rcParams["figure.autolayout"] = True
+        
         # 基准收益分布
-        plt.subplot(1, 2, 1)
+        plt.subplot(1, 3, 1)
         plt.hist(self.benchmark_returns, bins=30, alpha=0.5, label='Benchmark Returns')
         plt.axvline(self.benchmark_returns.mean(), color='r', linestyle='dashed', linewidth=1.5, label='Mean')
         plt.axvline(np.median(self.benchmark_returns), color='g', linestyle='dashed', linewidth=1.5, label='Median')
@@ -158,15 +163,15 @@ class CTABacktester:
 
         # 基准收益概率密度曲线
         plt.twinx()
-        kde = gaussian_kde(self.benchmark_returns['returns'])
-        x1 = np.linspace(np.min(self.benchmark_returns['returns']), np.max(self.benchmark_returns['returns']), 100)
+        kde = gaussian_kde(self.benchmark_returns.values)
+        x1 = np.linspace(np.min(self.benchmark_returns.values), np.max(self.benchmark_returns.values), 100)
         y1 = kde(x1)
         plt.plot(x1, y1, color='blue', label='KDE')
         plt.title('Benchmark Returns Distribution')
         plt.legend()
 
         # 策略收益分布
-        plt.subplot(1, 2, 2)
+        plt.subplot(1, 3, 2)
         plt.hist(self.strategy_returns, bins=30, alpha=0.5, label='Strategy Returns')
         plt.axvline(self.strategy_returns.mean(), color='r', linestyle='dashed', linewidth=1.5, label='Mean')
         plt.axvline(np.median(self.strategy_returns), color='g', linestyle='dashed', linewidth=1.5, label='Median')
@@ -175,15 +180,15 @@ class CTABacktester:
 
         # 策略收益概率密度曲线
         plt.twinx()
-        kde = gaussian_kde(self.strategy_returns['returns'])
-        x2 = np.linspace(np.min(self.strategy_returns['returns']), np.max(self.strategy_returns['returns']), 100)
+        kde = gaussian_kde(self.strategy_returns.values)
+        x2 = np.linspace(np.min(self.strategy_returns.values), np.max(self.strategy_returns.values), 100)
         y2 = kde(x2)
         plt.plot(x2, y2, color='blue', label='KDE')
         plt.title('Strategy Returns Distribution')
         plt.legend()
 
         # 超额收益分布
-        plt.subplot(1, 2, 3)
+        plt.subplot(1, 3, 3)
         plt.hist(self.excess_returns, bins=30, alpha=0.5, label='Strategy Returns')
         plt.axvline(self.excess_returns.mean(), color='r', linestyle='dashed', linewidth=1.5, label='Mean')
         plt.axvline(np.median(self.excess_returns), color='g', linestyle='dashed', linewidth=1.5, label='Median')
@@ -192,14 +197,13 @@ class CTABacktester:
 
         # 超额收益概率密度曲线
         plt.twinx()
-        kde = gaussian_kde(self.excess_returns['returns'])
-        x3 = np.linspace(np.min(self.excess_returns['returns']), np.max(self.excess_returns['returns']), 100)
+        kde = gaussian_kde(self.excess_returns.values)
+        x3 = np.linspace(np.min(self.excess_returns.values), np.max(self.excess_returns.values), 100)
         y3 = kde(x3)
         plt.plot(x3, y3, color='blue', label='KDE')
         plt.title('Excess Returns Distribution')
         plt.legend()
 
-        plt.tight_layout()
         plt.show()
 
     def return_stats(self):
@@ -213,19 +217,20 @@ class CTABacktester:
         values3 = self.excess_returns.values
         values_list = [values1, values2, values3]
 
-        df = []
+        df = pd.DataFrame()
         for value in values_list:
-            stats = {}
+            stats = dict()
+
             stats['mean'] = np.round(np.mean(value), decimals=4)
             stats['std'] = np.round(np.std(value), decimals=4)
             stats['median'] = np.round(np.median(value), decimals=4)
             stats['kurtosis'] = np.round(kurtosis(value), decimals=4)
             stats['skewness'] = np.round(skew(value), decimals=4)
 
-            df1 = pd.DataFrame(stats)
-            df = df.append(df1)
+            df1 = pd.DataFrame(stats, index=[0])
+            df = df._append(df1)
 
-        df.set_index(['benchmark', 'strategy', 'excess'], inplace=True)
+        df.set_index([['benchmark', 'strategy', 'excess']], drop=True, inplace=True)
         df.index.name = 'Stats'
 
         return df
@@ -234,11 +239,13 @@ class CTABacktester:
         """运行回测框架"""
         self.execute_trades()
         self.plot_performance()
-        df = self.get_dataframe()
+        df1 = self.get_dataframe()
         print("Returns Dataframe:")
-        print(df)
+        print(df1)
         self.plot_returns_distribution()
-
+        df2 = self.return_stats()
+        print("Returns Stats")
+        print(df2)
 
 if __name__ == '__main__':
     # 回测起止时间
