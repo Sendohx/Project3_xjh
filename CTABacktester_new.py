@@ -1,5 +1,5 @@
 # -*- coding = utf-8 -*-
-# @Time: 2023/12/13 10:52
+# @Time: 2023/12/18 16:52
 # @Author: Jiahao Xu
 # @File：CTABackTester_new.py
 # @Software: PyCharm
@@ -8,12 +8,13 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import kurtosis, skew, gaussian_kde
+from matplotlib.backends.backend_pdf import PdfPages
 
 
 class CTABacktester:
     """CTA回测基础框架"""
 
-    def __init__(self, start_date, end_date, assets, weights, lower_limit, upper_limit, risk_free_rate=0.02,
+    def __init__(self, path, start_date, end_date, assets, weights, lower_limit, upper_limit, risk_free_rate=0.02,
                  min_acceptable_return=0.0):
         """
         : param start_date: 回测开始日期
@@ -25,6 +26,7 @@ class CTABacktester:
         : param risk_free_rate: 无风险收益率
         : param min_acceptable_return: 最小可接受回报率，用于计算索提诺比率
         """
+        self.path = path
         self.start_date = start_date
         self.end_date = end_date
         self.assets = assets
@@ -94,8 +96,9 @@ class CTABacktester:
 
     def plot_performance(self):
         """绘制策略和基准收益走势图"""
+        fig1 = plt.figure(figsize=(25, 10))
+        plt.rcParams['font.size'] = 16
         plt.rcParams["figure.autolayout"] = True
-        plt.figure(figsize=(10, 6))
         plt.plot((self.strategy_returns + 1).cumprod() - 1, label='Strategy Returns')
         plt.plot((self.benchmark_returns + 1).cumprod() - 1, label='Benchmark Returns')
         plt.plot((self.strategy_returns + 1).cumprod() - (self.benchmark_returns + 1).cumprod(), label='Excess Returns')
@@ -104,8 +107,10 @@ class CTABacktester:
         plt.title('Return Trend')
         plt.xlabel('Date')
         plt.xticks(rotation=45)
-        plt.ylabel('Cumulative Returns')
-        plt.show()
+        plt.ylabel('Cumulative \n Returns',rotation=0, labelpad=40)
+        # plt.yticks(rotation=45)
+
+        return fig1
 
     def calculate_annual_return(self, returns):
         """
@@ -181,14 +186,17 @@ class CTABacktester:
             / (self.excess_returns[self.excess_returns < self.min_acceptable_return].std() * np.sqrt(242))]
 
         df = pd.DataFrame(metrics)
+        df = df.round(4)
         df.set_index([['benchmark', 'strategy', 'excess']], inplace=True)
+        df.index.name = 'Backtest'
+        df.reset_index(inplace=True)
 
         return df
 
     def plot_returns_distribution(self):
         """绘制收益分布直方图和统计指标"""
-        plt.figure(figsize=(25, 6))
-        # plt.rcParams['font.size'] = 16
+        fig2 = plt.figure(figsize=(25, 6))
+        plt.rcParams['font.size'] = 16
         plt.rcParams["figure.autolayout"] = True
 
         # 基准收益分布
@@ -241,7 +249,8 @@ class CTABacktester:
         plt.plot(x3, y3, color='blue', label='KDE')
         plt.title('Excess Returns Distribution')
         plt.legend()
-        plt.show()
+
+        return fig2
 
     def return_stats(self):
         """
@@ -269,17 +278,46 @@ class CTABacktester:
 
         df.set_index([['benchmark', 'strategy', 'excess']], drop=True, inplace=True)
         df.index.name = 'Stats'
+        df.reset_index(inplace=True)
 
         return df
 
     def run_backtest(self):
-        """运行回测框架"""
+        """运行回测框架,生成pdf"""
         self.execute_trades()
-        self.plot_performance()
-        df1 = self.get_dataframe()
-        print("Returns Dataframe:")
-        print(df1)
-        self.plot_returns_distribution()
-        df2 = self.return_stats()
-        print("Returns Stats")
-        print(df2)
+        with PdfPages(self.path) as pdf:
+            pdf.savefig(self.plot_performance())
+
+            df1 = self.get_dataframe()
+            fig2, ax2 = plt.subplots(figsize=(25, 5))
+            ax2.axis('off')  # Hide the axis
+            table = ax2.table(cellText=df1.values, colLabels=df1.columns, cellLoc='center', loc='center')
+            table.auto_set_font_size(True)
+            table.scale(1.5, 1.5)
+            pdf.savefig(fig2)
+
+            pdf.savefig(self.plot_returns_distribution())
+
+            df2 = self.return_stats()
+            fig4, ax4 = plt.subplots(figsize=(25,5))
+            ax4.axis('off')  # Hide the axis
+            table = ax4.table(cellText=df2.values, colLabels=df2.columns, cellLoc='center', loc='center')
+            table.auto_set_font_size(True)
+            table.scale(1.5, 1.5)
+            pdf.savefig(fig4)
+
+
+if __name__ == '__main__':
+    # 回测起止时间
+    start_date = '20140101'
+    end_date = '20231208'
+    path = f'C:/Users/Sendoh/PycharmProjects/Project3_xjh/results/{start_date}_{end_date}.pdf'
+    # 交易标的和对应权重
+    assets = ['000985CSI']
+    weights = [0.5]
+    lower_limit = 0.0
+    upper_limit = 1.0
+
+    # 创建回测对象并执行回测
+    backtester = CTABacktester(path, start_date, end_date, assets, weights, lower_limit, upper_limit)
+    backtester.run_backtest()
