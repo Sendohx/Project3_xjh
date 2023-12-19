@@ -1,5 +1,5 @@
 # -*- coding = utf-8 -*-
-# @Time: 2023/12/18 16:52
+# @Time: 2023/12/19 12:52
 # @Author: Jiahao Xu
 # @File：CTABackTester_new.py
 # @Software: PyCharm
@@ -7,8 +7,11 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import kurtosis, skew, gaussian_kde
+from scipy.stats import kurtosis, skew, norm, gaussian_kde
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.gridspec import GridSpec
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
 
 
 class CTABacktester:
@@ -70,11 +73,17 @@ class CTABacktester:
     def get_portfolio_returns(self):  # 这个函数是不同策略的主要区别所在
         """获取组合收益率"""
         portfolio_returns = None
+        positions_desc = None
 
         for asset, weight in zip(self.assets, self.weights):
             asset_data = self.get_asset_data(asset)
             # return_data = asset_data['weighted_return']
             # return_data = return_data.rename(columns={'weighted_return':'return'})
+            mean_weight = asset_data['weight'].mean()
+            position_changes = asset_data['weight'].diff() != 0
+            adjustment_frequency = position_changes.sum() / len(asset_data)
+            temp_series = pd.Series([mean_weight, adjustment_frequency], name=asset)
+            positions_desc = pd.concat([positions_desc, temp_series], axis=1)
 
             if portfolio_returns is None:
                 portfolio_returns = asset_data['return'] * asset_data['weight']
@@ -82,14 +91,19 @@ class CTABacktester:
                 portfolio_returns += asset_data['return'] * asset_data['weight']
 
         portfolio_returns.rename('return')
-
-        return portfolio_returns
+        # positions_desc = positions_desc.iloc[:, 1:] # 如果position_desc最开始是空series就需要去掉第一列，是none不用去掉
+        positions_desc.index = ['平均仓位', '调仓频率']
+        positions_desc = positions_desc.round(4)
+        positions_desc = positions_desc.T
+        positions_desc.index.name = 'asset'
+        positions_desc.reset_index(inplace=True)
+        return portfolio_returns, positions_desc
 
     def execute_trades(self):
         """执行交易并计算策略收益率、基准收益率和超额收益率"""
-        self.strategy_returns = self.get_portfolio_returns()
+        self.strategy_returns = self.get_portfolio_returns()[0]
         self.benchmark_returns = self.get_benchmark_data()['return']
-        self.excess_returns = ((self.strategy_returns + 1).cumprod() - (self.benchmark_returns + 1).cumprod()).diff()
+        self.excess_returns = self.strategy_returns - self.benchmark_returns
         self.strategy_returns.iloc[0] = 0
         self.benchmark_returns.iloc[0] = 0
         self.excess_returns.iloc[0] = 0
@@ -101,11 +115,11 @@ class CTABacktester:
         plt.rcParams["figure.autolayout"] = True
         plt.plot((self.strategy_returns + 1).cumprod() - 1, label='Strategy Returns')
         plt.plot((self.benchmark_returns + 1).cumprod() - 1, label='Benchmark Returns')
-        plt.plot((self.strategy_returns + 1).cumprod() - (self.benchmark_returns + 1).cumprod(), label='Excess Returns')
+        plt.plot((self.excess_returns + 1).cumprod() - 1, label='Excess Returns')
         plt.legend(loc='best')
         plt.gca().xaxis.set_major_locator(plt.MaxNLocator(15))
         plt.title('Return Trend')
-        plt.xlabel('Date')
+        # plt.xlabel('Date')
         plt.xticks(rotation=45)
         plt.ylabel('Cumulative \n Returns',rotation=0, labelpad=40)
         # plt.yticks(rotation=45)
@@ -156,34 +170,30 @@ class CTABacktester:
         """计算策略的各项指标"""
         metrics = dict()
 
-        metrics['Annual Returns'] = [
+        metrics['Annual_Returns'] = [
             self.calculate_annual_return(self.benchmark_returns),
             self.calculate_annual_return(self.strategy_returns),
-            self.calculate_annual_return(self.benchmark_returns) - self.calculate_annual_return(self.strategy_returns)]
+            self.calculate_annual_return(self.excess_returns)]
 
-        metrics['Annual Volatility'] = [
+        metrics['Annual_Volatility'] = [
             self.calculate_annual_volatility(self.benchmark_returns),
             self.calculate_annual_volatility(self.strategy_returns),
             self.calculate_annual_volatility(self.excess_returns)]
 
-        metrics['Max Drawdown'] = [
+        metrics['Max_Drawdown(%)'] = [
             self.calculate_max_drawdown(self.benchmark_returns),
             self.calculate_max_drawdown(self.strategy_returns),
-            (self.excess_returns.cumsum().cummax() - self.excess_returns.cumsum()).max() * 100]
+            self.calculate_max_drawdown(self.excess_returns)]
 
         metrics['Sharpe'] = [
             self.calculate_sharpe_ratio(self.benchmark_returns),
             self.calculate_sharpe_ratio(self.strategy_returns),
-            (self.calculate_annual_return(self.benchmark_returns) - self.calculate_annual_return(
-                self.strategy_returns) - self.risk_free_rate)
-            / self.calculate_annual_volatility(self.excess_returns)]
+            self.calculate_sharpe_ratio(self.excess_returns)]
 
         metrics['Sortino'] = [
             self.calculate_sortino_ratio(self.benchmark_returns),
             self.calculate_sortino_ratio(self.strategy_returns),
-            (self.calculate_annual_return(self.benchmark_returns) - self.calculate_annual_return(
-                self.strategy_returns) - self.risk_free_rate)
-            / (self.excess_returns[self.excess_returns < self.min_acceptable_return].std() * np.sqrt(242))]
+            self.calculate_sortino_ratio(self.excess_returns)]
 
         df = pd.DataFrame(metrics)
         df = df.round(4)
@@ -211,8 +221,12 @@ class CTABacktester:
         plt.twinx()
         kde = gaussian_kde(self.benchmark_returns.values)
         x1 = np.linspace(np.min(self.benchmark_returns.values), np.max(self.benchmark_returns.values), 100)
-        y1 = kde(x1)
-        plt.plot(x1, y1, color='blue', label='KDE')
+        mean1 = np.mean(self.benchmark_returns.values)
+        std1 = np.std(self.benchmark_returns.values, ddof=1)
+        y11 = kde(x1)
+        y12 = norm.pdf(x1, mean1, std1)
+        plt.plot(x1, y11, color='blue', label='Distribution')
+        plt.plot(x1, y12, color='black', label='Normal Distribution')
         plt.title('Benchmark Returns Distribution')
         plt.legend()
 
@@ -228,8 +242,12 @@ class CTABacktester:
         plt.twinx()
         kde = gaussian_kde(self.strategy_returns.values)
         x2 = np.linspace(np.min(self.strategy_returns.values), np.max(self.strategy_returns.values), 100)
-        y2 = kde(x2)
-        plt.plot(x2, y2, color='blue', label='KDE')
+        mean2 = np.mean(self.strategy_returns.values)
+        std2 = np.std(self.strategy_returns.values, ddof=1)
+        y21 = kde(x2)
+        y22 = norm.pdf(x2, mean2, std2)
+        plt.plot(x2, y21, color='blue', label='Distribution')
+        plt.plot(x1, y22, color='black', label='Normal Distribution')
         plt.title('Strategy Returns Distribution')
         plt.legend()
 
@@ -245,8 +263,12 @@ class CTABacktester:
         plt.twinx()
         kde = gaussian_kde(self.excess_returns.values)
         x3 = np.linspace(np.min(self.excess_returns.values), np.max(self.excess_returns.values), 100)
-        y3 = kde(x3)
-        plt.plot(x3, y3, color='blue', label='KDE')
+        mean3 = np.mean(self.excess_returns.values)
+        std3 = np.std(self.excess_returns.values, ddof=1)
+        y31 = kde(x3)
+        y32 = norm.pdf(x3, mean3, std3)
+        plt.plot(x3, y31, color='blue', label='Distribution')
+        plt.plot(x3, y32, color='black', label='Normal Distribution')
         plt.title('Excess Returns Distribution')
         plt.legend()
 
@@ -285,35 +307,65 @@ class CTABacktester:
     def run_backtest(self):
         """运行回测框架,生成pdf"""
         self.execute_trades()
+
         with PdfPages(self.path) as pdf:
+            fig1 = plt.figure(figsize=(25, 8))
+            plt.rcParams["figure.autolayout"] = True
+            gs = GridSpec(1, 2, figure=fig1, width_ratios=[2, 3])
+            ax1_1 = fig1.add_subplot(gs[0, 0])
+            ax1_1.axis('off')
+            ax1_1.text(0.2, 0.5, description, fontsize=20, ha='center', va='center')
+            ax1_2 = fig1.add_subplot(gs[0, 1])
+            ax1_2.axis('off')
+            table1 = ax1_2.table(cellText=self.get_portfolio_returns()[1].values,
+                                colLabels=self.get_portfolio_returns()[1].columns,
+                                cellLoc='center', loc='center')
+            table1.auto_set_font_size(False)
+            table1.set_fontsize(20)
+            table1.scale(1, 2.5)
+            pdf.savefig(fig1)
+
             pdf.savefig(self.plot_performance())
 
             df1 = self.get_dataframe()
             fig2, ax2 = plt.subplots(figsize=(25, 5))
+            plt.rcParams["figure.autolayout"] = True
             ax2.axis('off')  # Hide the axis
-            table = ax2.table(cellText=df1.values, colLabels=df1.columns, cellLoc='center', loc='center')
-            table.auto_set_font_size(True)
-            table.scale(1.5, 1.5)
+            table2 = ax2.table(cellText=df1.values, colLabels=df1.columns, cellLoc='center', loc='center')
+            table2.auto_set_font_size(True)
+            table2.scale(1.5, 1.5)
             pdf.savefig(fig2)
 
             pdf.savefig(self.plot_returns_distribution())
 
             df2 = self.return_stats()
-            fig4, ax4 = plt.subplots(figsize=(25,5))
+            fig4, ax4 = plt.subplots(figsize=(25, 5))
+            plt.rcParams["figure.autolayout"] = True
             ax4.axis('off')  # Hide the axis
-            table = ax4.table(cellText=df2.values, colLabels=df2.columns, cellLoc='center', loc='center')
-            table.auto_set_font_size(True)
-            table.scale(1.5, 1.5)
+            table3 = ax4.table(cellText=df2.values, colLabels=df2.columns, cellLoc='center', loc='center')
+            table3.auto_set_font_size(True)
+            table3.scale(1.5, 1.5)
             pdf.savefig(fig4)
 
 
 if __name__ == '__main__':
+    description = f"""
+    回测规则：\n 
+    标的资产： 中证全指\n
+    指标： t0日 - ILLIQ_q （滚动分位值）, t0日 - r 资产收益率\n
+    初始仓位： 0.5\n
+    if ILLIQ_q > 65 and r > 0\n
+      t1日仓位 = t0日仓位 + 0.1\n
+    elif  ILLIQ_q > 65 and r < 0\n
+      t1日仓位 = t0日仓位 - 0.1\n
+    else\n
+     t1日仓位 = t0日仓位 """
     # 回测起止时间
     start_date = '20140101'
     end_date = '20231208'
     path = f'C:/Users/Sendoh/PycharmProjects/Project3_xjh/results/{start_date}_{end_date}.pdf'
     # 交易标的和对应权重
-    assets = ['000985CSI']
+    assets = ['000985.CSI']
     weights = [0.5]
     lower_limit = 0.0
     upper_limit = 1.0
